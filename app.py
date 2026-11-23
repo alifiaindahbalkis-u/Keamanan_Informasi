@@ -41,6 +41,11 @@ def read_uploaded_data(uploaded_file):
 
     raw = pd.read_csv(uploaded_file)
 
+    if raw.empty:
+        raise ValueError(
+            "Dataset kosong. Tidak ada data yang dapat dianalisis."
+        )
+
     # Jika CSV memiliki header fitur
     if set(FEATURE_COLUMNS).issubset(raw.columns):
         pass
@@ -391,10 +396,13 @@ elif menu == "Informasi Model":
 
     st.write("Evaluasi final pada KDDTest+:")
 
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2 = st.columns(2)
 
     col1.metric("Accuracy", "78.84%")
     col2.metric("Precision", "96.87%")
+
+    col3, col4 = st.columns(2)
+
     col3.metric("Recall", "64.93%")
     col4.metric("F1-Score", "77.75%")
 
