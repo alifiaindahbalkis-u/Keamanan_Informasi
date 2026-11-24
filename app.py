@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -8,27 +7,20 @@ from sklearn.metrics import (
     precision_score,
     recall_score,
     f1_score,
-    confusion_matrix
+    confusion_matrix,
 )
 
-from src.preprocessing import (
-    COLUMNS,
-    load_dataset,
-    prepare_features
-)
+from src.preprocessing import COLUMNS, load_dataset, prepare_features
 
 from src.predict import predict_network
 
+from src.security_report import generate_security_report
 
 # ==========================================
 # KONFIGURASI DASHBOARD
 # ==========================================
 
-st.set_page_config(
-    page_title="AI-NIDS Dashboard",
-    page_icon="🛡️",
-    layout="wide"
-)
+st.set_page_config(page_title="AI-NIDS Dashboard", page_icon="🛡️", layout="wide")
 
 FEATURE_COLUMNS = COLUMNS[:41]
 
@@ -37,14 +29,13 @@ FEATURE_COLUMNS = COLUMNS[:41]
 # FUNGSI MEMBACA DATA
 # ==========================================
 
+
 def read_uploaded_data(uploaded_file):
 
     raw = pd.read_csv(uploaded_file)
 
     if raw.empty:
-        raise ValueError(
-            "Dataset kosong. Tidak ada data yang dapat dianalisis."
-        )
+        raise ValueError("Dataset kosong. Tidak ada data yang dapat dianalisis.")
 
     # Jika CSV memiliki header fitur
     if set(FEATURE_COLUMNS).issubset(raw.columns):
@@ -63,8 +54,7 @@ def read_uploaded_data(uploaded_file):
 
         else:
             raise ValueError(
-                "CSV harus memiliki 41 fitur atau "
-                "43 kolom format NSL-KDD."
+                "CSV harus memiliki 41 fitur atau " "43 kolom format NSL-KDD."
             )
 
     if all(col in raw.columns for col in FEATURE_COLUMNS):
@@ -81,6 +71,23 @@ def read_uploaded_data(uploaded_file):
 
 
 # ==========================================
+# RISK LEVEL CLASSIFICATION
+# ==========================================
+
+
+def classify_risk(probability):
+
+    if probability < 0.40:
+        return "Low"
+
+    elif probability < 0.70:
+        return "Medium"
+
+    else:
+        return "High"
+
+
+# ==========================================
 # HEADER
 # ==========================================
 
@@ -91,9 +98,7 @@ st.write(
     "algoritma Random Forest dan dataset NSL-KDD."
 )
 
-st.caption(
-    "Dataset-based detection | Random Forest | Threshold: 0.5"
-)
+st.caption("Dataset-based detection | Random Forest | Threshold: 0.5")
 
 st.divider()
 
@@ -110,14 +115,17 @@ menu = st.sidebar.radio(
         "Dashboard",
         "Deteksi Intrusi",
         "Evaluasi Model",
-        "Informasi Model"
-    ]
+        "Informasi Model",
+        "Model Explainability",
+        "Riwayat Deteksi",
+    ],
 )
 
 
 # ==========================================
 # DATA INPUT
 # ==========================================
+
 
 @st.cache_data
 def get_sample_data():
@@ -130,6 +138,9 @@ if "results" not in st.session_state:
 
 if "actual" not in st.session_state:
     st.session_state.actual = None
+
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 
 # ==========================================
@@ -145,14 +156,9 @@ if menu == "Dashboard":
         "dan deteksi potensi intrusi jaringan."
     )
 
-    uploaded_file = st.file_uploader(
-        "Upload dataset CSV",
-        type=["csv"]
-    )
+    uploaded_file = st.file_uploader("Upload dataset CSV", type=["csv"])
 
-    use_sample = st.checkbox(
-        "Gunakan dataset pengujian KDDTest+"
-    )
+    use_sample = st.checkbox("Gunakan dataset pengujian KDDTest+")
 
     if st.button("Mulai Analisis", type="primary"):
 
@@ -166,9 +172,7 @@ if menu == "Dashboard":
                 X, y = prepare_features(raw)
 
             else:
-                st.warning(
-                    "Upload CSV atau pilih dataset KDDTest+."
-                )
+                st.warning("Upload CSV atau pilih dataset KDDTest+.")
                 st.stop()
 
             predictions = predict_network(X)
@@ -179,18 +183,27 @@ if menu == "Dashboard":
                 columns={
                     "label": "Prediksi",
                     "prediction": "Kode Prediksi",
-                    "probability": "Probabilitas Attack"
+                    "probability": "Probabilitas Attack",
                 }
             )
 
-            result_df["Status"] = result_df[
-                "Prediksi"
-            ]
+            result_df["Risk Level"] = result_df["Probabilitas Attack"].apply(
+                classify_risk
+            )
+
+            result_df["Status"] = result_df["Prediksi"]
 
             if y is not None:
-                result_df["Aktual"] = y.map(
-                    {0: "Normal", 1: "Attack"}
-                ).values
+                result_df["Aktual"] = y.map({0: "Normal", 1: "Attack"}).values
+
+                result_df["Jenis Serangan Aktual"] = (
+                    raw["label"]
+                    .astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .str.rstrip(".")
+                    .values
+                )
 
                 st.session_state.actual = y.values
 
@@ -199,11 +212,22 @@ if menu == "Dashboard":
 
             st.session_state.results = result_df
 
+            history_record = {
+                "Waktu": pd.Timestamp.now().strftime("%d-%m-%Y %H:%M:%S"),
+                "Total Data": len(result_df),
+                "Normal": (result_df["Kode Prediksi"] == 0).sum(),
+                "Attack": (result_df["Kode Prediksi"] == 1).sum(),
+                "Low": (result_df["Risk Level"] == "Low").sum(),
+                "Medium": (result_df["Risk Level"] == "Medium").sum(),
+                "High": (result_df["Risk Level"] == "High").sum(),
+            }
+
+            st.session_state.history.append(history_record)
+
             st.success("Analisis berhasil dilakukan!")
 
         except Exception as e:
             st.error(f"Terjadi kesalahan: {e}")
-
 
     if st.session_state.results is not None:
 
@@ -211,13 +235,9 @@ if menu == "Dashboard":
 
         total = len(result_df)
 
-        attack_count = (
-            result_df["Kode Prediksi"] == 1
-        ).sum()
+        attack_count = (result_df["Kode Prediksi"] == 1).sum()
 
-        normal_count = (
-            result_df["Kode Prediksi"] == 0
-        ).sum()
+        normal_count = (result_df["Kode Prediksi"] == 0).sum()
 
         col1, col2, col3 = st.columns(3)
 
@@ -227,21 +247,70 @@ if menu == "Dashboard":
 
         st.subheader("Distribusi Hasil Deteksi")
 
-        chart_data = pd.DataFrame({
-            "Kategori": ["Normal", "Attack"],
-            "Jumlah": [normal_count, attack_count]
-        })
-
-        st.bar_chart(
-            chart_data.set_index("Kategori")
+        chart_data = pd.DataFrame(
+            {"Kategori": ["Normal", "Attack"], "Jumlah": [normal_count, attack_count]}
         )
+
+        st.bar_chart(chart_data.set_index("Kategori"))
+
+        # DISTRIBUSI RISK LEVEL
+        st.subheader("Distribusi Risk Level")
+
+        risk_counts = (
+            result_df["Risk Level"]
+            .value_counts()
+            .reindex(["Low", "Medium", "High"], fill_value=0)
+        )
+
+        risk_data = pd.DataFrame({"Jumlah": risk_counts})
+
+        st.bar_chart(risk_data)
+
+        st.subheader("Persentase Risk Level")
+
+        risk_total = risk_counts.sum()
+
+        risk_cols = st.columns(3)
+
+        for col, level in zip(risk_cols, ["Low", "Medium", "High"]):
+            count = risk_counts[level]
+            percentage = count / risk_total * 100 if risk_total > 0 else 0
+
+            col.metric(f"{level} ({percentage:.2f}%)", f"{count:,}")
+
+        # ATTACK TYPE ANALYSIS
+        if "Jenis Serangan Aktual" in result_df.columns:
+
+            st.subheader("Analisis Jenis Serangan")
+
+            attack_data = result_df[result_df["Jenis Serangan Aktual"] != "normal"]
+
+            attack_analysis = attack_data.groupby("Jenis Serangan Aktual").agg(
+                Total=("Jenis Serangan Aktual", "count"),
+                Terdeteksi=("Kode Prediksi", "sum"),
+            )
+
+            attack_analysis["False Negative"] = (
+                attack_analysis["Total"] - attack_analysis["Terdeteksi"]
+            )
+
+            attack_analysis["Detection Rate (%)"] = (
+                attack_analysis["Terdeteksi"] / attack_analysis["Total"] * 100
+            ).round(2)
+
+            attack_analysis = attack_analysis.sort_values("Total", ascending=False)
+
+            st.dataframe(attack_analysis, use_container_width=True)
+
+        else:
+            st.info(
+                "Analisis jenis serangan membutuhkan dataset "
+                "yang memiliki kolom label."
+            )
 
         st.subheader("Hasil Prediksi")
 
-        st.dataframe(
-            result_df.head(100),
-            use_container_width=True
-        )
+        st.dataframe(result_df.head(100), use_container_width=True)
 
         csv = result_df.to_csv(index=False).encode("utf-8")
 
@@ -249,7 +318,18 @@ if menu == "Dashboard":
             "Download Hasil Prediksi",
             data=csv,
             file_name="hasil_deteksi_ai_nids.csv",
-            mime="text/csv"
+            mime="text/csv",
+        )
+
+    # AUTOMATED SECURITY REPORT
+
+        pdf_report = generate_security_report(result_df)
+
+        st.download_button(
+            "Download Automated Security Report (PDF)",
+            data=pdf_report,
+            file_name="AI_NIDS_Security_Report.pdf",
+            mime="application/pdf",
         )
 
 
@@ -274,13 +354,9 @@ elif menu == "Deteksi Intrusi":
 
         st.write("Ringkasan hasil klasifikasi:")
 
-        attack = result_df[
-            result_df["Kode Prediksi"] == 1
-        ]
+        attack = result_df[result_df["Kode Prediksi"] == 1]
 
-        normal = result_df[
-            result_df["Kode Prediksi"] == 0
-        ]
+        normal = result_df[result_df["Kode Prediksi"] == 0]
 
         col1, col2 = st.columns(2)
 
@@ -294,10 +370,7 @@ elif menu == "Deteksi Intrusi":
 
         st.subheader("Detail Prediksi")
 
-        st.dataframe(
-            result_df,
-            use_container_width=True
-        )
+        st.dataframe(result_df, use_container_width=True)
 
 
 # ==========================================
@@ -313,9 +386,7 @@ elif menu == "Evaluasi Model":
 
     if result_df is None:
 
-        st.info(
-            "Jalankan analisis dataset terlebih dahulu."
-        )
+        st.info("Jalankan analisis dataset terlebih dahulu.")
 
     elif actual is None:
 
@@ -329,20 +400,12 @@ elif menu == "Evaluasi Model":
 
         y_true = actual
 
-        y_pred = result_df[
-            "Kode Prediksi"
-        ].values
+        y_pred = result_df["Kode Prediksi"].values
 
         accuracy = accuracy_score(y_true, y_pred)
-        precision = precision_score(
-            y_true, y_pred, zero_division=0
-        )
-        recall = recall_score(
-            y_true, y_pred, zero_division=0
-        )
-        f1 = f1_score(
-            y_true, y_pred, zero_division=0
-        )
+        precision = precision_score(y_true, y_pred, zero_division=0)
+        recall = recall_score(y_true, y_pred, zero_division=0)
+        f1 = f1_score(y_true, y_pred, zero_division=0)
 
         col1, col2, col3, col4 = st.columns(4)
 
@@ -351,11 +414,7 @@ elif menu == "Evaluasi Model":
         col3.metric("Recall", f"{recall:.4f}")
         col4.metric("F1-Score", f"{f1:.4f}")
 
-        cm = confusion_matrix(
-            y_true,
-            y_pred,
-            labels=[0, 1]
-        )
+        cm = confusion_matrix(y_true, y_pred, labels=[0, 1])
 
         tn, fp, fn, tp = cm.ravel()
 
@@ -364,7 +423,7 @@ elif menu == "Evaluasi Model":
         cm_df = pd.DataFrame(
             cm,
             index=["Aktual Normal", "Aktual Attack"],
-            columns=["Prediksi Normal", "Prediksi Attack"]
+            columns=["Prediksi Normal", "Prediksi Attack"],
         )
 
         st.dataframe(cm_df)
@@ -412,6 +471,142 @@ elif menu == "Informasi Model":
         "hasil prediksi dataset upload."
     )
 
+# ==========================================
+# HALAMAN MODEL EXPLAINABILITY
+# ==========================================
+
+elif menu == "Model Explainability":
+
+    st.header("Model Explainability")
+
+    st.write(
+        "Halaman ini menampilkan fitur jaringan "
+        "yang paling berpengaruh terhadap keputusan "
+        "model Random Forest."
+    )
+
+    try:
+
+        importance_df = pd.read_csv(
+            "models/feature_importance.csv"
+        )
+
+        # Membersihkan nama fitur
+        importance_df["Feature"] = (
+            importance_df["feature"]
+            .str.replace(
+                r"^(remainder__|categorical__)",
+                "",
+                regex=True
+            )
+        )
+
+        # Mengubah importance menjadi persentase
+        importance_df["Importance (%)"] = (
+            importance_df["importance"] * 100
+        ).round(2)
+
+        # Mengambil 10 fitur teratas
+        top_features = (
+            importance_df
+            .sort_values(
+                "Importance (%)",
+                ascending=False
+            )
+            .head(10)
+        )
+
+        st.subheader("Top 10 Feature Importance")
+
+        st.bar_chart(
+            top_features.set_index("Feature")[
+                "Importance (%)"
+            ]
+        )
+
+        st.subheader("Detail Feature Importance")
+
+        display_df = top_features[
+            ["rank", "Feature", "Importance (%)"]
+        ].rename(
+            columns={
+                "rank": "Ranking"
+            }
+        )
+
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            hide_index=True
+        )
+
+        # Fitur paling berpengaruh
+        highest_feature = top_features.iloc[0]
+
+        st.subheader("Interpretasi Model")
+
+        st.metric(
+            "Fitur Paling Berpengaruh",
+            highest_feature["Feature"],
+            f'{highest_feature["Importance (%)"]:.2f}%'
+        )
+
+        st.info(
+            "Feature Importance menunjukkan kontribusi "
+            "relatif setiap fitur dalam proses pengambilan "
+            "keputusan Random Forest. Nilai yang lebih "
+            "tinggi menunjukkan pengaruh yang lebih besar "
+            "dalam model, tetapi tidak menunjukkan hubungan "
+            "sebab-akibat."
+        )
+
+    except FileNotFoundError:
+
+        st.error(
+            "File feature_importance.csv tidak ditemukan."
+        )
+
+    except Exception as e:
+
+        st.error(
+            f"Gagal memuat Feature Importance: {e}"
+        )
+
+# ==========================================
+# HALAMAN RIWAYAT DETEKSI
+# ==========================================
+
+elif menu == "Riwayat Deteksi":
+
+    st.header("Riwayat Deteksi")
+
+    if not st.session_state.history:
+
+        st.info(
+            "Belum ada riwayat analisis. "
+            "Silakan lakukan analisis pada halaman Dashboard."
+        )
+
+    else:
+
+        history_df = pd.DataFrame(st.session_state.history)
+
+        st.write(f"Total analisis: {len(history_df)}")
+
+        st.dataframe(history_df, use_container_width=True)
+
+        csv_history = history_df.to_csv(index=False).encode("utf-8")
+
+        st.download_button(
+            "Download Riwayat",
+            data=csv_history,
+            file_name="riwayat_deteksi_ai_nids.csv",
+            mime="text/csv",
+        )
+
+        if st.button("Hapus Semua Riwayat"):
+            st.session_state.history = []
+            st.rerun()
 
 # ==========================================
 # FOOTER
@@ -419,7 +614,4 @@ elif menu == "Informasi Model":
 
 st.divider()
 
-st.caption(
-    "AI-NIDS | Network Intrusion Detection System "
-    "| Random Forest"
-)
+st.caption("AI-NIDS | Network Intrusion Detection System " "| Random Forest")
